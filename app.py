@@ -309,4 +309,281 @@ elif page == "🔍 EDA":
     raw_df.boxplot(column=feat, by="risk_label", ax=axes[1],
                    boxprops=dict(color="#4f46e5"),
                    medianprops=dict(color="#ef4444", linewidth=2))
-    axes[1].set_title(f"{feat} — Boxplot by Risk L
+    axes[1].set_title(f"{feat} — Boxplot by Risk Label")
+    axes[1].set_xlabel("Risk Label (0=Low, 1=High)")
+    plt.suptitle("")
+    for ax in axes:
+        ax.set_facecolor("#f8f9fb")
+    fig.patch.set_facecolor("#f8f9fb")
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close()
+
+    st.markdown("---")
+
+    # Descriptive stats
+    st.markdown('<div class="section-title">Descriptive Statistics</div>', unsafe_allow_html=True)
+    st.dataframe(raw_df.describe().round(2), use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════
+# PAGE 3 — Model Performance
+# ══════════════════════════════════════════════════════════════
+
+elif page == "🤖 Model Performance":
+
+    st.title("🤖 Model Performance")
+    st.markdown("---")
+
+    if not models:
+        st.warning("No trained models found. Run `python src/train_model.py` first.")
+        st.stop()
+
+    X_train, X_test, y_train, y_test, _ = get_split(df)
+
+    # Model selector
+    model_name = st.selectbox("Select model", list(models.keys()))
+    model = models[model_name]
+
+    y_pred  = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)[:, 1]
+    report  = classification_report(y_test, y_pred, output_dict=True)
+    auc     = roc_auc_score(y_test, y_proba)
+
+    # Metric cards
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        metric_card("Accuracy",  f"{report['accuracy']:.1%}", model_name)
+    with col2:
+        metric_card("Precision", f"{report['1']['precision']:.1%}", "High risk class", "amber")
+    with col3:
+        metric_card("Recall",    f"{report['1']['recall']:.1%}", "High risk class", "red")
+    with col4:
+        metric_card("ROC-AUC",   f"{auc:.3f}", "Higher is better", "green")
+
+    st.markdown("---")
+
+    col_left, col_right = st.columns(2)
+
+    # Confusion matrix
+    with col_left:
+        st.markdown('<div class="section-title">Confusion Matrix</div>', unsafe_allow_html=True)
+        cm = confusion_matrix(y_test, y_pred)
+        fig, ax = plt.subplots(figsize=(5, 4))
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                    xticklabels=["Low Risk", "High Risk"],
+                    yticklabels=["Low Risk", "High Risk"],
+                    linewidths=0.5, ax=ax)
+        ax.set_title(f"Confusion Matrix — {model_name}")
+        ax.set_ylabel("Actual")
+        ax.set_xlabel("Predicted")
+        fig.patch.set_facecolor("#f8f9fb")
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+
+    # ROC curve
+    with col_right:
+        st.markdown('<div class="section-title">ROC Curve</div>', unsafe_allow_html=True)
+        fig, ax = plt.subplots(figsize=(5, 4))
+        colors_map = {"Random Forest": "#4f46e5", "Logistic Regression": "#10b981"}
+        for name, mdl in models.items():
+            fp, tp, _ = roc_curve(y_test, mdl.predict_proba(X_test)[:, 1])
+            a = roc_auc_score(y_test, mdl.predict_proba(X_test)[:, 1])
+            ax.plot(fp, tp, label=f"{name} (AUC={a:.3f})",
+                    color=colors_map.get(name, "#6366f1"), lw=2)
+        ax.plot([0, 1], [0, 1], "k--", lw=1)
+        ax.set_xlabel("False Positive Rate")
+        ax.set_ylabel("True Positive Rate")
+        ax.set_title("ROC Curve Comparison")
+        ax.legend(loc="lower right")
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.set_facecolor("#f8f9fb")
+        fig.patch.set_facecolor("#f8f9fb")
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+
+    st.markdown("---")
+
+    # Feature importance (RF only)
+    if model_name == "Random Forest":
+        st.markdown('<div class="section-title">Feature Importances — Random Forest</div>', unsafe_allow_html=True)
+        feature_names = [c for c in df.columns if c != "risk_label"]
+        importances   = model.feature_importances_
+        indices       = np.argsort(importances)[::-1][:15]
+
+        fig, ax = plt.subplots(figsize=(11, 5))
+        bars = ax.bar(range(15), importances[indices], color="#4f46e5", edgecolor="white")
+        ax.set_xticks(range(15))
+        ax.set_xticklabels([feature_names[i] for i in indices], rotation=40, ha="right")
+        ax.set_ylabel("Mean impurity decrease")
+        ax.set_title("Top 15 Feature Importances")
+        for bar, val in zip(bars, importances[indices]):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
+                    f"{val:.3f}", ha="center", va="bottom", fontsize=8)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.set_facecolor("#f8f9fb")
+        fig.patch.set_facecolor("#f8f9fb")
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+
+    # Full classification report
+    with st.expander("📋 Full Classification Report"):
+        report_df = pd.DataFrame(report).T.round(3)
+        st.dataframe(report_df, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════
+# PAGE 4 — Predict Risk
+# ══════════════════════════════════════════════════════════════
+
+elif page == "🎯 Predict Risk":
+
+    st.title("🎯 Predict Customer Risk")
+    st.markdown("Enter a customer's details below to get an instant risk prediction.")
+    st.markdown("---")
+
+    if not models or scaler is None:
+        st.warning("Models not loaded. Run `python src/train_model.py` first.")
+        st.stop()
+
+    # Model choice
+    model_choice = st.selectbox("Model", list(models.keys()))
+    st.markdown("---")
+
+    # Input form
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.markdown("**Demographics**")
+        age    = st.slider("Age", 18, 70, 35)
+        gender = st.selectbox("Gender", ["M", "F"])
+        employment_status = st.selectbox(
+            "Employment Status", ["Employed", "Self-Employed", "Unemployed"]
+        )
+        region = st.selectbox("Region", ["North", "South", "East", "West"])
+
+    with col2:
+        st.markdown("**Financials**")
+        income           = st.number_input("Annual Income (₹)", 10000, 200000, 55000, step=1000)
+        credit_limit     = st.number_input("Credit Limit (₹)",  1000, 100000, 20000, step=500)
+        credit_used      = st.number_input("Credit Used (₹)",   0,    100000, 8000,  step=500)
+        loan_outstanding = st.number_input("Loan Outstanding (₹)", 0, 100000, 5000, step=500)
+
+    with col3:
+        st.markdown("**Account & Transactions**")
+        missed_payments    = st.slider("Missed Payments",     0, 20, 1)
+        total_payments     = st.slider("Total Payments",      1, 200, 36)
+        num_products       = st.slider("Number of Products",  1, 10, 3)
+        account_age_months = st.slider("Account Age (months)", 1, 200, 48)
+        transaction_amount = st.number_input("Last Transaction (₹)", 100, 50000, 1500, step=100)
+        avg_monthly_spend  = st.number_input("Avg Monthly Spend (₹)", 100, 50000, 1400, step=100)
+        num_late_fees      = st.slider("Late Fees", 0, 20, 2)
+
+    st.markdown("---")
+    predict_btn = st.button("🔍 Predict Risk")
+
+    if predict_btn:
+        # ── Encode categoricals the same way as training ──
+        gender_enc     = 1 if gender == "M" else 0
+        emp_map        = {"Employed": 0, "Self-Employed": 1, "Unemployed": 2}
+        region_map     = {"East": 0, "North": 1, "South": 2, "West": 3}
+        emp_enc        = emp_map[employment_status]
+        region_enc     = region_map[region]
+
+        utilisation_rate    = credit_used / (credit_limit + 1)
+        payment_failure_rate = missed_payments / (total_payments + 1)
+        spend_deviation      = (transaction_amount - avg_monthly_spend) / (avg_monthly_spend + 1)
+
+        input_data = np.array([[
+            age, gender_enc, income, credit_limit, credit_used,
+            missed_payments, total_payments, num_products,
+            account_age_months, transaction_amount, avg_monthly_spend,
+            num_late_fees, loan_outstanding, emp_enc, region_enc,
+            utilisation_rate, payment_failure_rate, spend_deviation
+        ]])
+
+        # ── Scale & predict ──
+        try:
+            input_scaled = scaler.transform(input_data)
+            model    = models[model_choice]
+            pred     = model.predict(input_scaled)[0]
+            proba    = model.predict_proba(input_scaled)[0]
+            risk_pct = proba[1] * 100
+
+            st.markdown("---")
+
+            # Result banner
+            if pred == 1:
+                st.markdown(f"""
+                <div style="background:#fef2f2; border:1.5px solid #fca5a5; border-radius:12px;
+                            padding:1.5rem 2rem; margin-bottom:1rem;">
+                    <div style="font-size:22px; font-weight:700; color:#b91c1c;">
+                        🚨 HIGH RISK CUSTOMER
+                    </div>
+                    <div style="font-size:14px; color:#6b7280; margin-top:4px;">
+                        Model: {model_choice} &nbsp;|&nbsp; Confidence: {risk_pct:.1f}%
+                    </div>
+                </div>""", unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div style="background:#f0fdf4; border:1.5px solid #86efac; border-radius:12px;
+                            padding:1.5rem 2rem; margin-bottom:1rem;">
+                    <div style="font-size:22px; font-weight:700; color:#15803d;">
+                        ✅ LOW RISK CUSTOMER
+                    </div>
+                    <div style="font-size:14px; color:#6b7280; margin-top:4px;">
+                        Model: {model_choice} &nbsp;|&nbsp; Confidence: {100-risk_pct:.1f}%
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+            # Probability bar
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                st.markdown("**Risk Probability Breakdown**")
+                fig, ax = plt.subplots(figsize=(5, 2.5))
+                ax.barh(["Low Risk", "High Risk"],
+                        [proba[0]*100, proba[1]*100],
+                        color=["#10b981", "#ef4444"], edgecolor="white")
+                for i, v in enumerate([proba[0]*100, proba[1]*100]):
+                    ax.text(v + 0.5, i, f"{v:.1f}%", va="center", fontweight="bold")
+                ax.set_xlim(0, 110)
+                ax.set_xlabel("Probability (%)")
+                ax.spines[["top", "right"]].set_visible(False)
+                ax.set_facecolor("#f8f9fb")
+                fig.patch.set_facecolor("#f8f9fb")
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+
+            # Key risk factors summary
+            with col_p2:
+                st.markdown("**Key Risk Factors Detected**")
+                flags = []
+                if utilisation_rate > 0.9:
+                    flags.append("🔴 Credit utilisation > 90%")
+                if missed_payments >= 4:
+                    flags.append("🔴 4+ missed payments")
+                if income < 30000:
+                    flags.append("🟡 Low income (< ₹30,000)")
+                if employment_status == "Unemployed":
+                    flags.append("🟡 Unemployed")
+                if loan_outstanding > 15000:
+                    flags.append("🟡 High outstanding loan")
+                if payment_failure_rate > 0.2:
+                    flags.append("🟠 High payment failure rate")
+                if not flags:
+                    flags.append("🟢 No major risk flags detected")
+                for f in flags:
+                    st.markdown(f)
+
+        except Exception as e:
+            st.error(f"Prediction error: {e}")
+            st.info("Make sure the scaler was trained on the same features. "
+                    "Re-run `python src/train_model.py` if needed.")
+
+
+
+       
